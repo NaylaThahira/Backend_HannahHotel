@@ -1,0 +1,21 @@
+◇ injected env (9) from .env // tip: ⌘ override existing { override: true }
+◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
+Server berjalan di http://localhost:5001
+Executing (default): SELECT 1+1 AS result
+Connection to database has been established successfully.
+Executing (default): SELECT 1+1 AS result
+Executing (default): SELECT "id", "name", "email", "username", "password", "role", "location", "createdAt", "updatedAt" FROM "Admins" AS "Admin" WHERE "Admin"."username" = 'adminpadang' LIMIT 1;
+Executing (default): SELECT "id", "name", "email", "username", "password", "role", "location", "createdAt", "updatedAt" FROM "Admins" AS "Admin" WHERE "Admin"."username" = 'adminpadang' LIMIT 1;
+Executing (default): SELECT "id", "name", "email", "role", "location" FROM "Admins" AS "Admin" WHERE "Admin"."id" = 2;
+Executing (default): SELECT "id", "name", "email", "role", "location" FROM "Admins" AS "Admin" WHERE "Admin"."id" = 2;
+Executing (default): SELECT "id", "name", "email", "role", "location" FROM "Admins" AS "Admin" WHERE "Admin"."id" = 2;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting" WHERE "Setting"."key" = 'branch_info_padang' LIMIT 1;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting" WHERE "Setting"."key" = 'branch_info_painan' LIMIT 1;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting";
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting" WHERE "Setting"."key" = 'branch_info_padang' LIMIT 1;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting" WHERE "Setting"."key" = 'branch_info_painan' LIMIT 1;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting";
+Executing (default): SELECT "id", "name", "email", "role", "location" FROM "Admins" AS "Admin" WHERE "Admin"."id" = 2;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting" WHERE "Setting"."key" = 'branch_info_padang' LIMIT 1;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting" WHERE "Setting"."key" = 'branch_info_painan' LIMIT 1;
+Executing (default): SELECT "id", "key", "value", "createdAt", "updatedAt" FROM "Settings" AS "Setting";

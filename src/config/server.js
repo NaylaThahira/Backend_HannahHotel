@@ -17,13 +17,26 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
+const { authenticateJWT } = require('../middlewares/auth');
+app.use('/api', (req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || req.path.startsWith('/auth/') || req.path === '/contact') return next();
+  authenticateJWT(req, res, () => {
+    if (req.user.location === 'padang' && !req.path.startsWith('/rooms') && !req.path.startsWith('/branches/') && !/^\/(facilities|packages)(\/|$)/.test(req.path) && !(req.path === '/settings' && req.method === 'PUT' && Object.keys(req.body).every(key => (['rooms_subtitle_padang', 'tourist_attractions_padang_json', 'facilities_subtitle_padang'].includes(key) || /^contact_padang_(hotel_name|address|phone|email|map_latitude|map_longitude|map_url|map_label)$/.test(key))))) {
+      return res.status(403).json({ error: 'Admin Padang hanya dapat mengelola kamar dan informasi cabang Padang.' });
+    }
+    next();
+  });
+});
 // Register API Routes
 app.use("/api/auth", authRoutes);
 const roomsRoutes = require("../routes/rooms");
 app.use("/api/rooms", roomsRoutes);
+app.use("/api/branches", require("../routes/branches"));
 app.use("/api/settings", require("../routes/settings"));
+app.use("/api/contact", require("../routes/contact"));
 app.use("/api/galleries", require("../routes/galleries"));
 app.use("/api/facilities", require("../routes/facilities"));
+app.use("/api/packages", require("../routes/packages"));
 
 // Serve static files for image uploads
 const path = require('path');

@@ -3,18 +3,19 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../models');
+const { authenticateJWT } = require('../middlewares/auth');
 const { loginRateLimiter, recordFailedLogin, recordSuccessfulLogin, recordLogout } = require('../middleware/rateLimiter');
 
 // POST /api/auth/login
 router.post('/login', loginRateLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { username, password } = req.body;
     
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email dan password harus diisi' });
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
+      return res.status(400).json({ success: false, message: 'Username dan password harus diisi' });
     }
 
-    const admin = await db.Admin.findOne({ where: { email } });
+    const admin = await db.Admin.findOne({ where: { username: username.trim().toLowerCase() } });
     if (!admin) {
       recordFailedLogin(req);
       return res.status(401).json({ success: false, message: 'Kredensial tidak valid' });
@@ -26,18 +27,22 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       return res.status(401).json({ success: false, message: 'Kredensial tidak valid' });
     }
 
+    if ((req.body.location && req.body.location !== admin.location) || ((process.env.HOTEL_LOCATION || 'painan') !== admin.location)) {
+      return res.status(403).json({ success: false, message: 'Akun ini tidak memiliki akses ke admin lokasi tersebut.' });
+    }
     recordSuccessfulLogin(req);
 
     // Sign JWT
     const payload = {
       id: admin.id,
-      role: admin.role
+      role: admin.role,
+      location: admin.location
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET || 'fallback-jwt-secret-for-dev', { expiresIn: '1d' });
 
     // Set HttpOnly cookie
-    res.cookie('token', token, {
+    res.cookie(admin.location === 'padang' ? 'token_padang' : 'token_painan', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
@@ -48,7 +53,8 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       id: admin.id,
       name: admin.name,
       email: admin.email,
-      role: admin.role
+      role: admin.role,
+      location: admin.location
     };
 
     res.json({ success: true, data: adminData, message: 'Login berhasil' });
@@ -58,10 +64,15 @@ router.post('/login', loginRateLimiter, async (req, res) => {
   }
 });
 
+router.get('/me', authenticateJWT, (req, res) => {
+  const { id, name, email, role, location } = req.user;
+  res.json({ success: true, data: { id, name, email, role, location } });
+});
+
 // POST /api/auth/logout
 router.post('/logout', (req, res) => {
   recordLogout(req);
-  res.clearCookie('token');
+  res.clearCookie(process.env.HOTEL_LOCATION === 'padang' ? 'token_padang' : 'token_painan');
   res.json({ success: true, message: 'Logout berhasil' });
 });
 

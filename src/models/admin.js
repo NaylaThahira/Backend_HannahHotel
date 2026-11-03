@@ -16,8 +16,10 @@ module.exports = (sequelize, DataTypes) => {
   Admin.init({
     name: DataTypes.STRING,
     email: DataTypes.STRING,
+    username: DataTypes.STRING,
     password: DataTypes.STRING,
-    role: DataTypes.STRING
+    role: DataTypes.STRING,
+    location: DataTypes.STRING
   }, {
     sequelize,
     modelName: 'Admin',

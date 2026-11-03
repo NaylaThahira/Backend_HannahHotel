@@ -41,7 +41,58 @@ router.get('/', async (req, res) => {
 // PUT update multiple settings
 router.put('/', async (req, res) => {
   try {
+    if (Object.keys(req.body).some(key => key.startsWith('branch_info_'))) {
+      return res.status(403).json({ error: 'Gunakan pengaturan informasi cabang untuk mengubah kartu cabang' });
+    }
+    for (const key of Object.keys(req.body).filter(key => key.startsWith('contact_'))) {
+      if ((req.user.location === 'padang') !== key.startsWith('contact_padang_')) {
+        return res.status(403).json({ error: 'Anda hanya dapat mengubah informasi kontak cabang sendiri' });
+      }
+      const value = req.body[key];
+      if (typeof value !== 'string') return res.status(400).json({ error: 'Informasi kontak harus berupa teks' });
+      if (/contact_(padang_)?map_(latitude|longitude)$/.test(key)) {
+        const limit = key.endsWith('latitude') ? 90 : 180;
+        if (!value.trim() || !Number.isFinite(Number(value)) || Math.abs(Number(value)) > limit) return res.status(400).json({ error: 'Koordinat peta tidak valid' });
+      }
+      if (/contact_(padang_)?map_url$/.test(key)) {
+        try { if (!['https:', 'http:'].includes(new URL(value).protocol)) throw new Error(); }
+        catch { return res.status(400).json({ error: 'Link peta harus berupa URL http atau https yang valid' }); }
+      }
+      if (/contact_(padang_)?email$/.test(key) && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return res.status(400).json({ error: 'Alamat email tidak valid' });
+    }
+    const ownAttractionsKey = req.user.location === 'padang' ? 'tourist_attractions_padang_json' : 'tourist_attractions_json';
+    for (const key of Object.keys(req.body).filter(key => key.startsWith('tourist_attractions'))) {
+      if (key !== ownAttractionsKey) return res.status(403).json({ error: 'Anda hanya dapat mengubah area akomodasi cabang sendiri' });
+      let attractions;
+      try { attractions = JSON.parse(req.body[key]); }
+      catch { return res.status(400).json({ error: 'Area akomodasi tidak valid' }); }
+      if (!Array.isArray(attractions) || attractions.length > 50 ||
+        !attractions.every(item => typeof item === 'string' && item.trim() && item.length <= 200) ||
+        new Set(attractions.map(item => item.trim())).size !== attractions.length) {
+        return res.status(400).json({ error: 'Maksimal 50 area akomodasi unik dengan nama sepanjang 200 karakter' });
+      }
+      req.body[key] = JSON.stringify(attractions.map(item => item.trim()));
+    }
+    if (req.user.location !== 'padang' && Object.hasOwn(req.body, 'facilities_subtitle_padang')) {
+      return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
+    }
     const updates = req.body; // e.g. { footer_about: '...', footer_address: '...' }
+    if (Object.prototype.hasOwnProperty.call(updates, 'contact_fields_json')) {
+      let fields;
+      try {
+        fields = JSON.parse(updates.contact_fields_json);
+      } catch {
+        return res.status(400).json({ error: 'Data field formulir tidak valid' });
+      }
+      const types = ['text', 'email', 'tel', 'textarea', 'number', 'date'];
+      if (!Array.isArray(fields) || fields.length > 5 || !fields.some(field => field && field.type === 'email') || !fields.every(field =>
+        field && typeof field.id === 'string' && field.id.trim() &&
+        typeof field.label === 'string' && field.label.trim() && types.includes(field.type) &&
+        typeof field.placeholder === 'string' && typeof field.required === 'boolean'
+      ) || new Set(fields.map(field => field.id)).size !== fields.length) {
+        return res.status(400).json({ error: 'Maksimal 5 field dengan nama, jenis, dan ID unik yang valid' });
+      }
+    }
     const keys = Object.keys(updates);
     
     // Update each setting one by one

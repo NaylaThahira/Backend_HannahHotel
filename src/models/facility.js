@@ -10,8 +10,12 @@ module.exports = (sequelize, DataTypes) => {
   }
   Facility.init({
     name: DataTypes.STRING,
+        location: DataTypes.STRING,
     description: DataTypes.TEXT,
-    icon: DataTypes.STRING
+    icon: DataTypes.STRING,
+    price: DataTypes.STRING,
+    imageUrl: DataTypes.STRING,
+    facilities: DataTypes.JSON
   }, {
     sequelize,
     modelName: 'Facility',
