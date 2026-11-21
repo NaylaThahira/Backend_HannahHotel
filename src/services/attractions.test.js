@@ -12,7 +12,7 @@ test('tourist attractions preserve Painan data and enforce separate branch editi
       backups[key] = setting ? setting.value : null;
     }
     for (const location of ['padang', 'painan']) {
-      const api = `http://localhost:${location === 'padang' ? 5001 : 5000}`;
+      const api = `http://localhost:5000/${location}`;
       const login = await fetch(`${api}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: `admin${location}`, password: '12345' }) });
       assert.equal(login.status, 200);
       const cookie = login.headers.get('set-cookie').split(';')[0];

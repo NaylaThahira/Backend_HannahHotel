@@ -5,8 +5,6 @@
   "scripts": {
     "start": "node ./src/config/server.js",
     "dev": "nodemon ./src/config/server.js",
-    "dev:padang": "nodemon ./src/config/server-padang.js",
-    "start:padang": "node ./src/config/server-padang.js",
     "test:locations": "node --test src/services/hotel-locations.test.js",
     "db:status": "sequelize-cli db:migrate:status",
     "db:migrate": "sequelize-cli db:migrate",

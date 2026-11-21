@@ -7,7 +7,7 @@ test('facilities and packages support both branches, stored addresses, and owner
   const created = [];
   const backups = {};
   const cookies = {};
-  const api = location => `http://localhost:${location === 'padang' ? 5001 : 5000}`;
+  const api = location => `http://localhost:5000/${location}`;
   const call = (location, endpoint, method = 'GET', body) => fetch(`${api(location)}/api/${endpoint}`, {
     method, headers: { cookie: cookies[location], 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined
   });

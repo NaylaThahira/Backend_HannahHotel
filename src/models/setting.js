@@ -14,7 +14,10 @@ module.exports = (sequelize, DataTypes) => {
     }
   }
   Setting.init({
-    key: DataTypes.STRING,
+    key: {
+      type: DataTypes.STRING,
+      unique: true
+    },
     value: DataTypes.TEXT
   }, {
     sequelize,

@@ -10,7 +10,7 @@ test('branch cards persist text and images, link to branch rooms, and enforce ow
   db.sequelize.options.logging = false;
   const backups = {};
   const images = [];
-  const api = location => `http://localhost:${location === 'padang' ? 5001 : 5000}`;
+  const api = location => `http://localhost:5000/${location}`;
   try {
     for (const location of ['padang', 'painan']) {
       const key = `branch_info_${location}`;

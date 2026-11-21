@@ -5,7 +5,7 @@ const db = require('../models');
 test('contact page has two editable branches, Padang map, and no message form', async () => {
   db.sequelize.options.logging = false;
   const backups = {};
-  const api = location => `http://localhost:${location === 'padang' ? 5001 : 5000}`;
+  const api = location => `http://localhost:5000/${location}`;
   const key = (location, field) => `contact_${location === 'padang' ? 'padang_' : ''}${field}`;
   try {
     const initial = await (await fetch('http://localhost:5000/api/settings')).json();

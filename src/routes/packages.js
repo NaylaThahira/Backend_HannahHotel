@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../models');
 const { authenticateJWT } = require('../middlewares/auth');
+const { revalidateFrontend } = require('../services/revalidate');
+const { isPositiveIntId, safeDeleteUpload } = require('../utils/security');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -34,16 +36,18 @@ function parseIncluded(value, fallback = []) {
 }
 
 function removeImage(imageUrl) {
-    if (!imageUrl || !imageUrl.startsWith('/uploads/')) return;
-    const imagePath = path.join(__dirname, '../../public', imageUrl);
-    if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+    safeDeleteUpload(imageUrl, 'packages');
 }
 
 router.get('/', async (req, res) => {
     try {
         const location = req.query.location;
         if (location && !['padang', 'painan'].includes(location)) return res.status(400).json({ error: 'Lokasi tidak valid' });
-        res.json(await db.Package.findAll({ where: location ? { location } : {}, order: [['id', 'ASC']] }));
+        res.json(await db.Package.findAll({
+            where: location ? { location } : {},
+            attributes: ['id', 'name', 'location', 'description', 'imageUrl'],
+            order: [['id', 'ASC']]
+        }));
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: 'Failed to fetch packages' });
@@ -57,6 +61,7 @@ router.get('/manage', authenticateJWT, async (req, res) => {
 
 router.get('/:id', async (req, res) => {
     try {
+        if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID paket tidak valid' });
         const item = await db.Package.findByPk(req.params.id);
         if (!item) return res.status(404).json({ error: 'Package not found' });
         res.json(item);
@@ -68,15 +73,18 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', authenticateJWT, upload.single('image'), async (req, res) => {
     try {
-      if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
-        if (!req.body.name || !req.body.description) return res.status(400).json({ error: 'Nama dan deskripsi wajib diisi.' });
+        if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
+        if (typeof req.body.name !== 'string' || !req.body.name.trim() || req.body.name.length > 200 || typeof req.body.description !== 'string' || !req.body.description.trim() || req.body.description.length > 5000) {
+            return res.status(400).json({ error: 'Nama (maks 200 karakter) dan deskripsi (maks 5000 karakter) wajib diisi.' });
+        }
         const item = await db.Package.create({
             location: req.user.location,
-            name: req.body.name,
-            description: req.body.description,
+            name: req.body.name.trim(),
+            description: req.body.description.trim(),
             included: parseIncluded(req.body.included),
             imageUrl: req.file ? await processImage(req.file.buffer) : ''
         });
+        await revalidateFrontend(['packages']);
         res.status(201).json(item);
     } catch (error) {
         console.error(error);
@@ -86,20 +94,28 @@ router.post('/', authenticateJWT, upload.single('image'), async (req, res) => {
 
 router.put('/:id', authenticateJWT, upload.single('image'), async (req, res) => {
     try {
-      if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
+        if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID paket tidak valid' });
+        if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
         const item = await db.Package.findByPk(req.params.id);
         if (!item || item.location !== req.user.location) return res.status(404).json({ error: 'Package not found' });
+        if (req.body.name !== undefined && (typeof req.body.name !== 'string' || !req.body.name.trim() || req.body.name.length > 200)) {
+            return res.status(400).json({ error: 'Nama paket tidak valid (maks 200 karakter).' });
+        }
+        if (req.body.description !== undefined && (typeof req.body.description !== 'string' || !req.body.description.trim() || req.body.description.length > 5000)) {
+            return res.status(400).json({ error: 'Deskripsi paket tidak valid (maks 5000 karakter).' });
+        }
         let imageUrl = item.imageUrl;
         if (req.file) {
             imageUrl = await processImage(req.file.buffer);
             removeImage(item.imageUrl);
         }
         await item.update({
-            name: req.body.name,
-            description: req.body.description,
+            name: req.body.name !== undefined ? req.body.name.trim() : item.name,
+            description: req.body.description !== undefined ? req.body.description.trim() : item.description,
             included: parseIncluded(req.body.included, item.included || []),
             imageUrl
         });
+        await revalidateFrontend(['packages']);
         res.json(item);
     } catch (error) {
         console.error(error);
@@ -109,10 +125,12 @@ router.put('/:id', authenticateJWT, upload.single('image'), async (req, res) => 
 
 router.delete('/:id', authenticateJWT, async (req, res) => {
     try {
+        if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID paket tidak valid' });
         const item = await db.Package.findByPk(req.params.id);
         if (!item || item.location !== req.user.location) return res.status(404).json({ error: 'Package not found' });
         removeImage(item.imageUrl);
         await item.destroy();
+        await revalidateFrontend(['packages']);
         res.json({ message: 'Package deleted successfully' });
     } catch (error) {
         console.error(error);

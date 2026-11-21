@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../models');
 const { authenticateJWT } = require('../middlewares/auth');
+const { revalidateFrontend } = require('../services/revalidate');
+const { isPositiveIntId, safeDeleteUpload } = require('../utils/security');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -33,6 +35,7 @@ router.get('/', async (req, res) => {
     if (location && !['padang', 'painan'].includes(location)) return res.status(400).json({ error: 'Lokasi tidak valid' });
     const facilities = await db.Facility.findAll({
       where: location ? { location } : {},
+      attributes: ['id', 'name', 'location', 'description', 'icon', 'imageUrl', 'price', 'facilities'],
       order: [['id', 'ASC']]
     });
     res.json(facilities);
@@ -42,7 +45,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET single facility
+// GET manage facilities
 router.get('/manage', authenticateJWT, async (req, res) => {
   try { res.json(await db.Facility.findAll({ where: { location: req.user.location }, order: [['id', 'ASC']] })); }
   catch (error) { console.error(error); res.status(500).json({ error: 'Gagal mengambil data cabang' }); }
@@ -50,6 +53,7 @@ router.get('/manage', authenticateJWT, async (req, res) => {
 
 router.get('/:id', async (req, res) => {
   try {
+    if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID fasilitas tidak valid' });
     const facility = await db.Facility.findByPk(req.params.id);
     if (!facility) return res.status(404).json({ error: 'Facility not found' });
     res.json(facility);
@@ -62,20 +66,26 @@ router.get('/:id', async (req, res) => {
 // POST new facility
 router.post('/', authenticateJWT, upload.single('image'), async (req, res) => {
   try {
-      if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
+    if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
     const { name, description, icon, price } = req.body;
-    if (!name || !description) return res.status(400).json({ error: 'Nama dan deskripsi wajib diisi.' });
-    
+    if (typeof name !== 'string' || !name.trim() || name.length > 200 || typeof description !== 'string' || !description.trim() || description.length > 5000) {
+      return res.status(400).json({ error: 'Nama (maks 200 karakter) dan deskripsi (maks 5000 karakter) wajib diisi.' });
+    }
+    if (price !== undefined && (typeof price !== 'string' || price.length > 100)) {
+      return res.status(400).json({ error: 'Format harga tidak valid.' });
+    }
+
     const newFacility = await db.Facility.create({
-            location: req.user.location,
-      name,
-      description,
+      location: req.user.location,
+      name: name.trim(),
+      description: description.trim(),
       icon: icon || null,
-      price,
+      price: typeof price === 'string' ? price.trim() : '',
       imageUrl: req.file ? await processImage(req.file.buffer) : '',
       facilities: parseFacilities(req.body.facilities)
     });
 
+    await revalidateFrontend(['facilities']);
     res.status(201).json(newFacility);
   } catch (error) {
     console.error(error);
@@ -86,29 +96,37 @@ router.post('/', authenticateJWT, upload.single('image'), async (req, res) => {
 // PUT update facility
 router.put('/:id', authenticateJWT, upload.single('image'), async (req, res) => {
   try {
-      if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
+    if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID fasilitas tidak valid' });
+    if (req.body.location && req.body.location !== req.user.location) return res.status(403).json({ error: 'Anda hanya dapat mengelola cabang sendiri' });
     const facility = await db.Facility.findByPk(req.params.id);
     if (!facility || facility.location !== req.user.location) return res.status(404).json({ error: 'Facility not found' });
 
     const { name, description, icon, price } = req.body;
+    if (name !== undefined && (typeof name !== 'string' || !name.trim() || name.length > 200)) {
+      return res.status(400).json({ error: 'Nama fasilitas tidak valid (maks 200 karakter).' });
+    }
+    if (description !== undefined && (typeof description !== 'string' || !description.trim() || description.length > 5000)) {
+      return res.status(400).json({ error: 'Deskripsi fasilitas tidak valid (maks 5000 karakter).' });
+    }
+    if (price !== undefined && (typeof price !== 'string' || price.length > 100)) {
+      return res.status(400).json({ error: 'Format harga tidak valid.' });
+    }
     let imageUrl = facility.imageUrl;
     if (req.file) {
       imageUrl = await processImage(req.file.buffer);
-      if (facility.imageUrl && facility.imageUrl.startsWith('/uploads/')) {
-        const oldPath = path.join(__dirname, '../../public', facility.imageUrl);
-        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-      }
+      safeDeleteUpload(facility.imageUrl, 'facilities');
     }
-    
+
     await facility.update({
-      name,
-      description,
+      name: name !== undefined ? name.trim() : facility.name,
+      description: description !== undefined ? description.trim() : facility.description,
       icon: icon === undefined ? facility.icon : icon,
-      price,
+      price: price !== undefined ? price.trim() : facility.price,
       imageUrl,
       facilities: parseFacilities(req.body.facilities, facility.facilities || [])
     });
 
+    await revalidateFrontend(['facilities']);
     res.json(facility);
   } catch (error) {
     console.error(error);
@@ -119,14 +137,13 @@ router.put('/:id', authenticateJWT, upload.single('image'), async (req, res) => 
 // DELETE facility
 router.delete('/:id', authenticateJWT, async (req, res) => {
   try {
+    if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID fasilitas tidak valid' });
     const facility = await db.Facility.findByPk(req.params.id);
     if (!facility || facility.location !== req.user.location) return res.status(404).json({ error: 'Facility not found' });
 
-    if (facility.imageUrl && facility.imageUrl.startsWith('/uploads/')) {
-      const imagePath = path.join(__dirname, '../../public', facility.imageUrl);
-      if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
-    }
+    safeDeleteUpload(facility.imageUrl, 'facilities');
     await facility.destroy();
+    await revalidateFrontend(['facilities']);
     res.json({ message: 'Facility deleted successfully' });
   } catch (error) {
     console.error(error);

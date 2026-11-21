@@ -1,17 +1,26 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../models');
-const { authenticateJWT } = require('../middlewares/auth');
-const { loginRateLimiter, recordFailedLogin, recordSuccessfulLogin, recordLogout } = require('../middleware/rateLimiter');
+const { COOKIE_OPTIONS, getJwtSecret } = require('../utils/security');
+const { authenticateJWT, primeAdminSessionCache, revokeAdminToken } = require('../middlewares/auth');
+const { loginRateLimiter, recordFailedLogin, recordSuccessfulLogin, recordLogout } = require('../middlewares/rateLimiter');
 
 // POST /api/auth/login
 router.post('/login', loginRateLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body;
-    
-    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
+    const { username, password } = req.body || {};
+
+    if (
+      typeof username !== 'string' ||
+      typeof password !== 'string' ||
+      !username.trim() ||
+      !password ||
+      username.length > 100 ||
+      password.length > 200
+    ) {
       return res.status(400).json({ success: false, message: 'Username dan password harus diisi' });
     }
 
@@ -27,26 +36,32 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       return res.status(401).json({ success: false, message: 'Kredensial tidak valid' });
     }
 
-    if ((req.body.location && req.body.location !== admin.location) || ((process.env.HOTEL_LOCATION || 'painan') !== admin.location)) {
+    const expectedLocation = req.adminLocation || req.body.location || admin.location;
+    if ((req.body.location && req.body.location !== admin.location) || (expectedLocation !== admin.location)) {
       return res.status(403).json({ success: false, message: 'Akun ini tidak memiliki akses ke admin lokasi tersebut.' });
     }
     recordSuccessfulLogin(req);
 
-    // Sign JWT
+    // Revoke any previous branch session tokens before issuing a fresh single active session
+    if (req.cookies?.token_padang) revokeAdminToken(req.cookies.token_padang);
+    if (req.cookies?.token_painan) revokeAdminToken(req.cookies.token_painan);
+
     const payload = {
       id: admin.id,
       role: admin.role,
-      location: admin.location
+      location: admin.location,
+      jti: crypto.randomUUID(),
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET || 'fallback-jwt-secret-for-dev', { expiresIn: '1d' });
+    const token = jwt.sign(payload, getJwtSecret(), { expiresIn: '1d' });
 
-    // Set HttpOnly cookie
-    res.cookie(admin.location === 'padang' ? 'token_padang' : 'token_painan', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000 // 1 day
+    const activeCookie = admin.location === 'padang' ? 'token_padang' : 'token_painan';
+    const otherCookie = admin.location === 'padang' ? 'token_painan' : 'token_padang';
+
+    res.clearCookie(otherCookie, COOKIE_OPTIONS);
+    res.cookie(activeCookie, token, {
+      ...COOKIE_OPTIONS,
+      maxAge: 24 * 60 * 60 * 1000, // 1 day
     });
 
     const adminData = {
@@ -54,9 +69,11 @@ router.post('/login', loginRateLimiter, async (req, res) => {
       name: admin.name,
       email: admin.email,
       role: admin.role,
-      location: admin.location
+      location: admin.location,
     };
+    primeAdminSessionCache(adminData);
 
+    res.set('Cache-Control', 'no-store');
     res.json({ success: true, data: adminData, message: 'Login berhasil' });
   } catch (error) {
     console.error('Login error:', error);
@@ -66,13 +83,18 @@ router.post('/login', loginRateLimiter, async (req, res) => {
 
 router.get('/me', authenticateJWT, (req, res) => {
   const { id, name, email, role, location } = req.user;
+  res.set('Cache-Control', 'no-store');
   res.json({ success: true, data: { id, name, email, role, location } });
 });
 
 // POST /api/auth/logout
 router.post('/logout', (req, res) => {
+  if (req.cookies?.token_padang) revokeAdminToken(req.cookies.token_padang);
+  if (req.cookies?.token_painan) revokeAdminToken(req.cookies.token_painan);
   recordLogout(req);
-  res.clearCookie(process.env.HOTEL_LOCATION === 'padang' ? 'token_padang' : 'token_painan');
+  res.clearCookie('token_padang', COOKIE_OPTIONS);
+  res.clearCookie('token_painan', COOKIE_OPTIONS);
+  res.set('Cache-Control', 'no-store');
   res.json({ success: true, message: 'Logout berhasil' });
 });
 

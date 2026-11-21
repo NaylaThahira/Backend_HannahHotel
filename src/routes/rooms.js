@@ -6,6 +6,8 @@ const fs = require('fs');
 const sharp = require('sharp');
 const db = require('../models');
 const { authenticateJWT } = require('../middlewares/auth');
+const { revalidateFrontend } = require('../services/revalidate');
+const { isPositiveIntId, isSafeUploadUrl, safeDeleteUpload } = require('../utils/security');
 
 // Configure Multer for memory upload
 const storage = multer.memoryStorage();
@@ -25,20 +27,37 @@ const upload = multer({
   }
 });
 
-// GET all rooms
+// GET all rooms (listing attributes only)
 router.get('/', async (req, res) => {
   try {
-    const location = req.query.location || (process.env.HOTEL_LOCATION === 'padang' ? 'padang' : undefined);
+    const location = req.query.location || (req.adminLocation === 'padang' ? 'padang' : undefined);
     if (location && !['padang', 'painan'].includes(location)) return res.status(400).json({ error: 'Lokasi tidak valid' });
-    if (process.env.HOTEL_LOCATION === 'padang' && location !== 'padang') return res.status(403).json({ error: 'Akses lokasi ditolak' });
+    if (req.adminLocation === 'padang' && location !== 'padang') return res.status(403).json({ error: 'Akses lokasi ditolak' });
     const rooms = await db.Room.findAll({
       where: location ? { location } : {},
+      attributes: ['id', 'name', 'location', 'price', 'description', 'imageUrl', 'facilities', 'isFeatured'],
       order: [['id', 'ASC']]
     });
     res.json(rooms);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to fetch rooms' });
+  }
+});
+
+// GET room count
+router.get('/count', async (req, res) => {
+  try {
+    const location = req.query.location || (req.adminLocation === 'padang' ? 'padang' : undefined);
+    if (location && !['padang', 'painan'].includes(location)) return res.status(400).json({ error: 'Lokasi tidak valid' });
+    if (req.adminLocation === 'padang' && location !== 'padang') return res.status(403).json({ error: 'Akses lokasi ditolak' });
+    const count = await db.Room.count({
+      where: location ? { location } : {}
+    });
+    res.json({ count });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to count rooms' });
   }
 });
 
@@ -50,8 +69,9 @@ router.get('/manage', authenticateJWT, async (req, res) => {
 // GET single room
 router.get('/:id', async (req, res) => {
   try {
+    if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID kamar tidak valid' });
     const room = await db.Room.findByPk(req.params.id);
-    if (!room || (req.user && room.location !== req.user.location) || (process.env.HOTEL_LOCATION === 'padang' && room.location !== 'padang')) return res.status(404).json({ error: 'Room not found' });
+    if (!room || (req.user && room.location !== req.user.location) || (req.adminLocation === 'padang' && room.location !== 'padang')) return res.status(404).json({ error: 'Room not found' });
     res.json(room);
   } catch (error) {
     console.error(error);
@@ -78,21 +98,24 @@ const processImage = async (buffer) => {
   return '/uploads/rooms/' + filename;
 };
 
-const normalizeDetailImageUrls = (input) => {
+const normalizeDetailImageUrls = (input, allowedExistingUrls = []) => {
+  const allowedSet = new Set(
+    (Array.isArray(allowedExistingUrls) ? allowedExistingUrls : []).filter((u) => isSafeUploadUrl(u, 'rooms'))
+  );
+  let candidates = [];
   if (Array.isArray(input)) {
-    return input.slice(0, 4);
-  }
-
-  if (typeof input === 'string') {
+    candidates = input;
+  } else if (typeof input === 'string') {
     try {
       const parsed = JSON.parse(input);
-      return Array.isArray(parsed) ? parsed.slice(0, 4) : [];
-    } catch (error) {
+      if (Array.isArray(parsed)) candidates = parsed;
+    } catch {
       return [];
     }
   }
-
-  return [];
+  return candidates
+    .filter((u) => typeof u === 'string' && isSafeUploadUrl(u, 'rooms') && allowedSet.has(u))
+    .slice(0, 4);
 };
 
 const getUploadedDetailImages = async (files = []) => {
@@ -112,7 +135,13 @@ router.post('/', authenticateJWT, upload.fields([
   { name: 'detailImages', maxCount: 4 }
 ]), async (req, res) => {
   try {
-    const { name, price, description, isFeatured, facilities, detailImageUrls } = req.body;
+    const { name, price, description, isFeatured, facilities } = req.body;
+    if (typeof name !== 'string' || !name.trim() || name.length > 200 || typeof description !== 'string' || !description.trim() || description.length > 5000) {
+      return res.status(400).json({ error: 'Nama (maks 200 karakter) dan deskripsi (maks 5000 karakter) wajib diisi.' });
+    }
+    if (price !== undefined && (typeof price !== 'string' || price.length > 100)) {
+      return res.status(400).json({ error: 'Format harga tidak valid.' });
+    }
     if (isFeatured === 'true' || isFeatured === true) {
       const count = await db.Room.count({ where: { location: req.user.location, isFeatured: true } });
       if (count >= 2) return res.status(400).json({ error: 'Maksimal 2 kamar pilihan per lokasi.' });
@@ -132,7 +161,7 @@ router.post('/', authenticateJWT, upload.fields([
       }
     }
 
-    let parsedDetailImageUrls = normalizeDetailImageUrls(detailImageUrls);
+    let parsedDetailImageUrls = [];
     if (req.files && req.files.detailImages && req.files.detailImages.length > 0) {
       parsedDetailImageUrls = await getUploadedDetailImages(req.files.detailImages);
     }
@@ -140,9 +169,9 @@ router.post('/', authenticateJWT, upload.fields([
     const roomPayload = {
       location: req.user.location,
       createdByAdminId: req.user.id,
-      name,
-      price,
-      description,
+      name: name.trim(),
+      price: typeof price === 'string' ? price.trim() : '',
+      description: description.trim(),
       imageUrl,
       isFeatured: isFeatured === 'true' || isFeatured === true,
       facilities: parsedFacilities
@@ -153,6 +182,7 @@ router.post('/', authenticateJWT, upload.fields([
     }
 
     const newRoom = await db.Room.create(roomPayload);
+    await revalidateFrontend(['rooms', 'branches']);
 
     res.status(201).json(newRoom);
   } catch (error) {
@@ -167,10 +197,20 @@ router.put('/:id', authenticateJWT, upload.fields([
   { name: 'detailImages', maxCount: 4 }
 ]), async (req, res) => {
   try {
+    if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID kamar tidak valid' });
     const room = await db.Room.findByPk(req.params.id);
-    if (!room || (req.user && room.location !== req.user.location) || (process.env.HOTEL_LOCATION === 'padang' && room.location !== 'padang')) return res.status(404).json({ error: 'Room not found' });
+    if (!room || (req.user && room.location !== req.user.location) || (req.adminLocation === 'padang' && room.location !== 'padang')) return res.status(404).json({ error: 'Room not found' });
 
     const { name, price, description, isFeatured, facilities, detailImageUrls } = req.body;
+    if (name !== undefined && (typeof name !== 'string' || !name.trim() || name.length > 200)) {
+      return res.status(400).json({ error: 'Nama kamar tidak valid (maks 200 karakter).' });
+    }
+    if (description !== undefined && (typeof description !== 'string' || !description.trim() || description.length > 5000)) {
+      return res.status(400).json({ error: 'Deskripsi kamar tidak valid (maks 5000 karakter).' });
+    }
+    if (price !== undefined && (typeof price !== 'string' || price.length > 100)) {
+      return res.status(400).json({ error: 'Format harga tidak valid.' });
+    }
 
     // Check limit if trying to set as featured
     const tryingToFeature = isFeatured === 'true' || isFeatured === true;
@@ -184,14 +224,7 @@ router.put('/:id', authenticateJWT, upload.fields([
     let imageUrl = room.imageUrl; // Keep old image by default
     if (req.files && req.files.image && req.files.image[0]) {
       imageUrl = await processImage(req.files.image[0].buffer);
-
-      // Delete old image from disk
-      if (room.imageUrl && room.imageUrl.startsWith('/uploads/')) {
-        const oldPath = path.join(__dirname, '../../public', room.imageUrl);
-        if (fs.existsSync(oldPath)) {
-          fs.unlinkSync(oldPath);
-        }
-      }
+      safeDeleteUpload(room.imageUrl, 'rooms');
     }
 
     let parsedFacilities = room.facilities || [];
@@ -203,28 +236,29 @@ router.put('/:id', authenticateJWT, upload.fields([
       }
     }
 
-    let parsedDetailImageUrls = room.detailImageUrls || [];
+    const existingDetailUrls = Array.isArray(room.detailImageUrls) ? room.detailImageUrls : [];
+    let parsedDetailImageUrls = existingDetailUrls;
     if (req.files && req.files.detailImages && req.files.detailImages.length > 0) {
+      const retainedUrls = detailImageUrls !== undefined
+        ? normalizeDetailImageUrls(detailImageUrls, existingDetailUrls)
+        : [];
       const uploadedDetailImages = await getUploadedDetailImages(req.files.detailImages);
-      parsedDetailImageUrls = uploadedDetailImages;
+      parsedDetailImageUrls = [...retainedUrls, ...uploadedDetailImages].slice(0, 4);
 
-      const oldUrls = Array.isArray(room.detailImageUrls) ? room.detailImageUrls : [];
-      for (const oldUrl of oldUrls) {
-        if (oldUrl && oldUrl.startsWith('/uploads/')) {
-          const oldPath = path.join(__dirname, '../../public', oldUrl);
-          if (fs.existsSync(oldPath)) {
-            fs.unlinkSync(oldPath);
-          }
+      const retainedSet = new Set(parsedDetailImageUrls);
+      for (const oldUrl of existingDetailUrls) {
+        if (!retainedSet.has(oldUrl)) {
+          safeDeleteUpload(oldUrl, 'rooms');
         }
       }
     } else if (detailImageUrls !== undefined) {
-      parsedDetailImageUrls = normalizeDetailImageUrls(detailImageUrls);
+      parsedDetailImageUrls = normalizeDetailImageUrls(detailImageUrls, existingDetailUrls);
     }
 
     const roomPayload = {
-      name,
-      price,
-      description,
+      name: name !== undefined ? name.trim() : room.name,
+      price: price !== undefined ? price.trim() : room.price,
+      description: description !== undefined ? description.trim() : room.description,
       imageUrl,
       isFeatured: isFeatured === undefined ? room.isFeatured : tryingToFeature,
       facilities: parsedFacilities
@@ -235,6 +269,7 @@ router.put('/:id', authenticateJWT, upload.fields([
     }
 
     await room.update(roomPayload);
+    await revalidateFrontend(['rooms', 'branches']);
 
     res.json(room);
   } catch (error) {
@@ -246,18 +281,21 @@ router.put('/:id', authenticateJWT, upload.fields([
 // DELETE room
 router.delete('/:id', authenticateJWT, async (req, res) => {
   try {
+    if (!isPositiveIntId(req.params.id)) return res.status(400).json({ error: 'ID kamar tidak valid' });
     const room = await db.Room.findByPk(req.params.id);
-    if (!room || (req.user && room.location !== req.user.location) || (process.env.HOTEL_LOCATION === 'padang' && room.location !== 'padang')) return res.status(404).json({ error: 'Room not found' });
+    if (!room || (req.user && room.location !== req.user.location) || (req.adminLocation === 'padang' && room.location !== 'padang')) return res.status(404).json({ error: 'Room not found' });
 
-    // Optional: Delete image from disk
-    if (room.imageUrl && room.imageUrl.startsWith('/uploads/')) {
-      const oldPath = path.join(__dirname, '../../public', room.imageUrl);
-      if (fs.existsSync(oldPath)) {
-        fs.unlinkSync(oldPath);
-      }
+    // Delete main image and detail images safely from disk
+    const imagesToDelete = [
+      room.imageUrl,
+      ...(Array.isArray(room.detailImageUrls) ? room.detailImageUrls : [])
+    ];
+    for (const imgUrl of imagesToDelete) {
+      safeDeleteUpload(imgUrl, 'rooms');
     }
 
     await room.destroy();
+    await revalidateFrontend(['rooms', 'branches']);
     res.json({ message: 'Room deleted successfully' });
   } catch (error) {
     console.error(error);

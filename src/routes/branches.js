@@ -5,24 +5,53 @@ const path = require('path');
 const fs = require('fs/promises');
 const db = require('../models');
 const { authenticateJWT } = require('../middlewares/auth');
+const { revalidateFrontend } = require('../services/revalidate');
 const router = express.Router();
 const locations = ['padang', 'painan'];
 const key = location => `branch_info_${location}`;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => cb(['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype) ? null : new Error('Format gambar tidak valid'), true) });
 
-async function getBranch(location) {
-  const setting = await db.Setting.findOne({ where: { key: key(location) } });
-  if (setting) return { ...JSON.parse(setting.value), id: location };
+async function buildDefaultBranch(location) {
   const label = location === 'padang' ? 'Padang' : 'Painan';
-  const room = await db.Room.findOne({ where: { location }, order: [['id', 'ASC']] });
-  return { id: location, title: `Hannah Hotel ${label}`, imageUrl: room?.imageUrl || '',
+  const room = await db.Room.findOne({
+    where: { location },
+    order: [['id', 'ASC']],
+    attributes: ['imageUrl']
+  });
+  return {
+    id: location,
+    title: `Hannah Hotel ${label}`,
+    imageUrl: room?.imageUrl || '',
     description: `Nikmati kenyamanan menginap di Hannah Hotel ${label}. Temukan pilihan kamar yang sesuai untuk Anda.`,
-    location: label };
+    location: label
+  };
+}
+
+async function getBranch(location) {
+  const setting = await db.Setting.findOne({
+    where: { key: key(location) },
+    attributes: ['key', 'value']
+  });
+  if (setting) return { ...JSON.parse(setting.value), id: location };
+  return buildDefaultBranch(location);
+}
+
+async function getAllBranches() {
+  const settings = await db.Setting.findAll({
+    where: { key: locations.map(key) },
+    attributes: ['key', 'value']
+  });
+  const byKey = new Map(settings.map(s => [s.key, s.value]));
+  return Promise.all(locations.map(async (location) => {
+    const raw = byKey.get(key(location));
+    if (raw) return { ...JSON.parse(raw), id: location };
+    return buildDefaultBranch(location);
+  }));
 }
 
 router.get('/', async (req, res) => {
-  try { res.json(await Promise.all(locations.map(getBranch))); }
+  try { res.json(await getAllBranches()); }
   catch (error) { console.error(error); res.status(500).json({ error: 'Gagal mengambil informasi cabang' }); }
 });
 
@@ -53,9 +82,16 @@ router.put('/:location', authenticateJWT, (req, res, next) => {
     }
     Object.assign(branch, { title: title.trim(), description: description.trim(), location: location.trim() });
     await db.sequelize.transaction(async transaction => {
-      const [setting] = await db.Setting.findOrCreate({ where: { key: key(req.user.location) }, defaults: { value: JSON.stringify(branch) }, transaction });
-      await setting.update({ value: JSON.stringify(branch) }, { transaction });
+      const [setting, created] = await db.Setting.findOrCreate({
+        where: { key: key(req.user.location) },
+        defaults: { value: JSON.stringify(branch) },
+        transaction
+      });
+      if (!created) {
+        await setting.update({ value: JSON.stringify(branch) }, { transaction });
+      }
     });
+    await revalidateFrontend(['branches', 'settings']);
     res.json(branch);
   } catch (error) {
     if (uploadedPath) await fs.unlink(uploadedPath).catch(() => {});

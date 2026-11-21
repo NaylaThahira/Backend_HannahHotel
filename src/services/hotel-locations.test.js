@@ -23,7 +23,7 @@ test('hotel accounts, room ownership, public filters and admin routes', async ()
       assert.equal(accounts[location].username, `admin${location}`);
       assert.ok(await bcrypt.compare('12345', accounts[location].password));
     }
-    const api = location => `http://localhost:${location === 'padang' ? 5001 : 5000}`;
+    const api = location => `http://localhost:5000/${location}`;
     const call = (location, path, init = {}) => fetch(`${api(location)}${path}`, { ...init, headers: { cookie: cookies[location], 'content-type': 'application/json', ...init.headers } });
 
     for (const location of ['painan', 'padang']) {

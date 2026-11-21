@@ -49,7 +49,7 @@ Panel tersedia di `http://localhost:3000/adminPainan` dan `http://localhost:3000
 
 Admin Padang saat ini memiliki Dashboard dan Manajemen Kamar. Admin Painan tetap memiliki seluruh menu yang sudah ada. Subtitle kamar Padang disimpan terpisah. Menu publik Kamar menawarkan `/rooms/padang` dan `/rooms/painan`; `/rooms` menampilkan kedua kelompok. Maksimal dua kamar pilihan per lokasi dapat tampil di beranda.
 
-Dengan PostgreSQL, kedua API, dan frontend aktif, jalankan `npm run test:locations` untuk memeriksa akun, login, pemisahan kamar, CRUD, dan route admin. Data kamar sementara dibersihkan setelah pengujian.
+Dengan PostgreSQL, API, dan frontend aktif, jalankan `npm run test:locations` untuk memeriksa akun, login, pemisahan kamar, CRUD, dan route admin. Data kamar sementara dibersihkan setelah pengujian.
 
 ## Perintah database
 
